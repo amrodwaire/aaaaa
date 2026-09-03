@@ -83,6 +83,8 @@ export default function App() {
   const [fileTitle, setFileTitle] = useState('');
   const [fileContent, setFileContent] = useState('');
   const [question, setQuestion] = useState('');
+  const [backendUrl, setBackendUrl] = useState('http://127.0.0.1:8787');
+  const [isLoading, setIsLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome',
@@ -107,15 +109,55 @@ export default function App() {
     setFileContent('');
   };
 
-  const ask = () => {
+  const askBackend = async (prompt: string) => {
+    const normalizedBase = backendUrl.trim().replace(/\/+$/, '');
+    if (!normalizedBase) {
+      return null;
+    }
+
+    const response = await fetch(`${normalizedBase}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question: prompt,
+        docs: docs.map((doc) => ({ title: doc.title, content: doc.content })),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Backend error: ${response.status}`);
+    }
+
+    const data: { answer?: string } = await response.json();
+    return data.answer ?? null;
+  };
+
+  const ask = async () => {
     if (!question.trim()) {
       return;
     }
-    const userMessage: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: question.trim() };
-    const answer = getAnswer(question, docs);
-    const assistantMessage: ChatMessage = { id: `a-${Date.now() + 1}`, role: 'assistant', text: answer };
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    const prompt = question.trim();
+    const userMessage: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: prompt };
+    setMessages((prev) => [...prev, userMessage]);
     setQuestion('');
+    setIsLoading(true);
+
+    try {
+      const backendAnswer = await askBackend(prompt);
+      const answer = backendAnswer ?? getAnswer(prompt, docs);
+      const assistantMessage: ChatMessage = { id: `a-${Date.now() + 1}`, role: 'assistant', text: answer };
+      setMessages((prev) => [...prev, assistantMessage]);
+    } catch {
+      const fallback = getAnswer(prompt, docs);
+      const assistantMessage: ChatMessage = {
+        id: `a-${Date.now() + 1}`,
+        role: 'assistant',
+        text: `تعذر الوصول للـ API، فتم استخدام الإجابة المحلية:\n${fallback}`,
+      };
+      setMessages((prev) => [...prev, assistantMessage]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -124,6 +166,19 @@ export default function App() {
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>مستشار نفسي بالذكاء الاصطناعي</Text>
           <Text style={styles.subtitle}>نسخة أولية: ارفع محتوى الملف كنص ثم اسأل.</Text>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>إعداد الربط مع Backend</Text>
+            <TextInput
+              value={backendUrl}
+              onChangeText={setBackendUrl}
+              placeholder="http://127.0.0.1:8787"
+              style={styles.input}
+              placeholderTextColor="#8f97b2"
+              autoCapitalize="none"
+            />
+            <Text style={styles.hint}>ضع عنوان السيرفر الذي يحتوي على API endpoint: /ask</Text>
+          </View>
 
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>رفع محتوى ملف</Text>
@@ -165,8 +220,8 @@ export default function App() {
               style={styles.input}
               placeholderTextColor="#8f97b2"
             />
-            <Pressable style={styles.button} onPress={ask}>
-              <Text style={styles.buttonText}>إرسال السؤال</Text>
+            <Pressable style={[styles.button, isLoading && styles.buttonDisabled]} onPress={ask}>
+              <Text style={styles.buttonText}>{isLoading ? 'جاري الإرسال...' : 'إرسال السؤال'}</Text>
             </Pressable>
             {messages.map((message) => (
               <View
