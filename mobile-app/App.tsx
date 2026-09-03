@@ -1,5 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
-import { useMemo, useState } from 'react';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import { useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -81,32 +83,58 @@ function getAnswer(question: string, docs: Doc[]) {
 export default function App() {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [fileTitle, setFileTitle] = useState('');
-  const [fileContent, setFileContent] = useState('');
   const [question, setQuestion] = useState('');
   const [backendUrl, setBackendUrl] = useState('http://127.0.0.1:8787');
   const [isLoading, setIsLoading] = useState(false);
+  const [isPickingFile, setIsPickingFile] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome',
       role: 'assistant',
-      text: 'مرحبًا، ارفع نص ملف استشاري ثم اسألني وسأجيبك من المحتوى.',
+      text: 'مرحبًا، ارفع ملفًا نصيًا كاملًا ثم اسألني وسأجيبك من المحتوى.',
     },
   ]);
 
-  const canAddDoc = useMemo(() => fileTitle.trim() && fileContent.trim(), [fileContent, fileTitle]);
-
-  const addDocument = () => {
-    if (!canAddDoc) {
-      return;
-    }
+  const addDocument = (title: string, content: string) => {
     const nextDoc: Doc = {
       id: String(Date.now()),
-      title: fileTitle.trim(),
-      content: fileContent.trim(),
+      title: title.trim().slice(0, 120) || 'بدون اسم',
+      content: content.trim(),
     };
     setDocs((prev) => [nextDoc, ...prev]);
-    setFileTitle('');
-    setFileContent('');
+  };
+
+  const pickDocument = async () => {
+    setUploadError('');
+    setIsPickingFile(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'text/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets?.length) {
+        return;
+      }
+
+      const file = result.assets[0];
+      const fileContent = await FileSystem.readAsStringAsync(file.uri, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+
+      if (!fileContent.trim()) {
+        setUploadError('الملف فارغ أو لا يمكن قراءة محتواه كنص.');
+        return;
+      }
+
+      addDocument(fileTitle || file.name || 'بدون اسم', fileContent);
+      setFileTitle('');
+    } catch {
+      setUploadError('تعذر رفع الملف. تأكد أن الملف نصي وحاول مرة أخرى.');
+    } finally {
+      setIsPickingFile(false);
+    }
   };
 
   const askBackend = async (prompt: string) => {
@@ -165,7 +193,7 @@ export default function App() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.container}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>مستشار نفسي بالذكاء الاصطناعي</Text>
-          <Text style={styles.subtitle}>نسخة أولية: ارفع محتوى الملف كنص ثم اسأل.</Text>
+          <Text style={styles.subtitle}>نسخة أولية: ارفع ملفًا نصيًا كاملًا ثم اسأل.</Text>
 
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>إعداد الربط مع Backend</Text>
@@ -181,26 +209,18 @@ export default function App() {
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>رفع محتوى ملف</Text>
+            <Text style={styles.sectionTitle}>رفع ملف كامل</Text>
             <TextInput
               value={fileTitle}
               onChangeText={setFileTitle}
-              placeholder="اسم الملف"
+              placeholder="اسم اختياري للملف (أو يُستخدم اسم الملف)"
               style={styles.input}
               placeholderTextColor="#8f97b2"
             />
-            <TextInput
-              value={fileContent}
-              onChangeText={setFileContent}
-              placeholder="الصق نص الملف هنا"
-              style={[styles.input, styles.multiline]}
-              multiline
-              textAlignVertical="top"
-              placeholderTextColor="#8f97b2"
-            />
-            <Pressable style={[styles.button, !canAddDoc && styles.buttonDisabled]} onPress={addDocument}>
-              <Text style={styles.buttonText}>إضافة الملف</Text>
+            <Pressable style={[styles.button, isPickingFile && styles.buttonDisabled]} onPress={pickDocument}>
+              <Text style={styles.buttonText}>{isPickingFile ? 'جاري اختيار الملف...' : 'اختيار ملف نصي'}</Text>
             </Pressable>
+            {!!uploadError && <Text style={styles.error}>{uploadError}</Text>}
             <Text style={styles.hint}>عدد الملفات: {docs.length}</Text>
             <FlatList
               data={docs}
@@ -283,9 +303,6 @@ const styles = StyleSheet.create({
     color: '#1b1f33',
     backgroundColor: '#f8f9ff',
   },
-  multiline: {
-    minHeight: 120,
-  },
   button: {
     backgroundColor: '#3d5af1',
     borderRadius: 10,
@@ -301,6 +318,10 @@ const styles = StyleSheet.create({
   },
   hint: {
     color: '#5d6484',
+    fontSize: 12,
+  },
+  error: {
+    color: '#c21a1a',
     fontSize: 12,
   },
   docItem: {
